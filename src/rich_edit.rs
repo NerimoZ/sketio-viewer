@@ -1,6 +1,11 @@
-use std::{ffi::OsStr, mem, os::windows::ffi::OsStrExt, ptr, slice};
+use std::{
+    ffi::OsStr,
+    mem::{self, MaybeUninit},
+    os::windows::ffi::OsStrExt,
+    ptr, slice,
+};
 
-use crate::{live_markdown::Style, native_paint::Palette};
+use crate::{live_markdown::Style, live_rtf, native_paint::Palette};
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, POINT, RECT, WPARAM},
     Graphics::Gdi::InvalidateRect,
@@ -40,6 +45,8 @@ const EM_CHARFROMPOS: u32 = 0x00d7;
 const EM_SETRECTNP: u32 = 0x00b4;
 const EM_SCROLLCARET: u32 = 0x00b7;
 const SF_RTF: WPARAM = 0x0002;
+const SF_TEXT_UTF8: WPARAM = (65001 << 16) | 0x0020 | 0x0001; // CP_UTF8 | SF_USECODEPAGE | SF_TEXT
+const STREAM_TEXT_THRESHOLD: usize = 256 * 1024;
 const SFF_SELECTION: WPARAM = 0x8000;
 const ENM_LINK: LPARAM = 0x0400_0000;
 const EN_LINK: u32 = 0x070b;
@@ -92,7 +99,6 @@ pub fn set_palette(control: HWND, palette: Palette) {
 }
 
 pub fn new_text(control: HWND, source: &str, palette: Palette) {
-    let text = wide(source);
     unsafe {
         SendMessageW(control, EM_SETEVENTMASK, 0, 0);
         SendMessageW(control, WM_SETTEXT, 0, wide("").as_ptr() as LPARAM);
@@ -103,7 +109,17 @@ pub fn new_text(control: HWND, source: &str, palette: Palette) {
             0,
             crate::document::DOCUMENT_LIMIT as LPARAM,
         );
-        SendMessageW(control, WM_SETTEXT, 0, text.as_ptr() as LPARAM);
+    }
+    // Large files avoid both a whole UTF-16 buffer here and RichEdit's WM_SETTEXT copy.
+    let streamed = source.len() >= STREAM_TEXT_THRESHOLD
+        && (stream_plain_rtf(control, source, palette)
+            || (!source.starts_with('\u{feff}')
+                && stream_in(control, source, SF_TEXT_UTF8).is_ok()));
+    if !streamed {
+        let source = crate::file_edit::normalized(source);
+        unsafe { SendMessageW(control, WM_SETTEXT, 0, wide(&*source).as_ptr() as LPARAM) };
+    }
+    unsafe {
         SendMessageW(control, 0x00cd, 0, 0); // EM_EMPTYUNDOBUFFER
         SendMessageW(control, EM_SETEVENTMASK, 0, ENM_SELCHANGE | 1); // ENM_CHANGE
     }
@@ -121,7 +137,7 @@ pub fn new_styled_text(control: HWND, rtf: &str, palette: Palette) -> std::io::R
             crate::document::DOCUMENT_LIMIT as LPARAM,
         );
     }
-    let result = stream_rtf(control, rtf, SF_RTF);
+    let result = stream_in(control, rtf, SF_RTF);
     unsafe {
         SendMessageW(control, 0x00cd, 0, 0); // EM_EMPTYUNDOBUFFER
         SendMessageW(control, EM_SETEVENTMASK, 0, ENM_SELCHANGE | 1); // ENM_CHANGE
@@ -134,12 +150,42 @@ pub fn source(control: HWND) -> String {
 }
 
 pub fn search_text(control: HWND) -> String {
+    String::from_utf16_lossy(&search_units(control))
+}
+
+pub fn search_units(control: HWND) -> Vec<u16> {
     // Preserve native character offsets across table delimiters and embedded objects.
     const GT_RAWTEXT: u32 = 4;
-    get_text(control, GT_RAWTEXT).replace(['\u{fff9}', '\u{fffb}', '\u{7}'], "\t")
+    let mut text = get_text_units(control, GT_RAWTEXT);
+    normalize_search_units(&mut text);
+    text
+}
+
+fn normalize_search_units(text: &mut [u16]) {
+    let mut units = text.iter_mut().peekable();
+    while let Some(unit) = units.next() {
+        *unit = match *unit {
+            0x000d => 0x000a,
+            0xfff9 | 0xfffb | 0x0007 => 0x0009,
+            0xd800..=0xdbff
+                if units
+                    .peek()
+                    .is_some_and(|next| matches!(**next, 0xdc00..=0xdfff)) =>
+            {
+                units.next();
+                *unit
+            }
+            0xd800..=0xdfff => 0xfffd,
+            value => value,
+        };
+    }
 }
 
 fn get_text(control: HWND, flags: u32) -> String {
+    String::from_utf16_lossy(&get_text_units(control, flags)).replace('\r', "\n")
+}
+
+fn get_text_units(control: HWND, flags: u32) -> Vec<u16> {
     #[repr(C, packed(4))]
     struct GetText {
         bytes: u32,
@@ -166,7 +212,8 @@ fn get_text(control: HWND, flags: u32) -> String {
         )
     }
     .max(0) as usize;
-    String::from_utf16_lossy(&text[..used]).replace('\r', "\n")
+    text.truncate(used);
+    text
 }
 
 pub fn set_paragraph(
@@ -559,7 +606,7 @@ pub fn show(
         SendMessageW(control, WM_SETTEXT, 0, wide("").as_ptr() as LPARAM);
         SendMessageW(control, EM_SETBKGNDCOLOR, 0, background as LPARAM);
     }
-    if let Err(error) = stream_rtf(control, rtf, SF_RTF) {
+    if let Err(error) = stream_in(control, rtf, SF_RTF) {
         resume_drawing();
         return Err(error);
     }
@@ -598,18 +645,46 @@ pub fn restyle_rtf(control: HWND, rtf: &str) -> std::io::Result<()> {
     format_without_undo(control, || {
         let mask = unsafe { SendMessageW(control, EM_SETEVENTMASK, 0, 0) };
         select(control, CharRange { start: 0, end: -1 }, false);
-        result = stream_rtf(control, rtf, SF_RTF | SFF_SELECTION);
+        result = stream_in(control, rtf, SF_RTF | SFF_SELECTION);
         unsafe { SendMessageW(control, EM_SETEVENTMASK, 0, mask) };
     });
     result
 }
 
-fn stream_rtf(control: HWND, rtf: &str, flags: WPARAM) -> std::io::Result<()> {
-    let mut remaining = rtf.as_bytes();
+fn stream_in(control: HWND, source: &str, flags: WPARAM) -> std::io::Result<()> {
+    let mut input = StreamInput {
+        remaining: source,
+        normalize_newlines: flags == SF_TEXT_UTF8,
+    };
+    stream_from(control, flags, &mut |buffer| input.read(buffer))?;
+    if !input.remaining.is_empty() {
+        return Err(std::io::Error::other(
+            "RichEdit did not read the full text stream",
+        ));
+    }
+    Ok(())
+}
+
+fn stream_plain_rtf(control: HWND, source: &str, palette: Palette) -> bool {
+    // Use the native text importer for unusual control characters.
+    if source
+        .bytes()
+        .any(|byte| matches!(byte, 0..=8 | 11..=12 | 14..=31 | 127))
+    {
+        return false;
+    }
+    let mut rtf = live_rtf::PlainText::new(source, palette);
+    stream_from(control, SF_RTF, &mut |buffer| rtf.read(buffer)).is_ok() && rtf.finished()
+}
+
+fn stream_from<F>(control: HWND, flags: WPARAM, read: &mut F) -> std::io::Result<()>
+where
+    F: FnMut(&mut [MaybeUninit<u8>]) -> usize,
+{
     let mut stream = EditStream {
-        cookie: ptr::from_mut(&mut remaining) as usize,
+        cookie: ptr::from_mut(read) as usize,
         error: 0,
-        callback: read_stream,
+        callback: read_stream::<F>,
     };
     unsafe {
         SendMessageW(
@@ -626,19 +701,52 @@ fn stream_rtf(control: HWND, rtf: &str, flags: WPARAM) -> std::io::Result<()> {
     Ok(())
 }
 
-unsafe extern "system" fn read_stream(
+struct StreamInput<'a> {
+    remaining: &'a str,
+    normalize_newlines: bool,
+}
+
+impl StreamInput<'_> {
+    fn read(&mut self, output: &mut [MaybeUninit<u8>]) -> usize {
+        let count = self
+            .remaining
+            .floor_char_boundary(self.remaining.len().min(output.len()));
+        let (mut text, tail) = self.remaining.split_at(count);
+        self.remaining = tail;
+        let mut written = 0;
+        if self.normalize_newlines {
+            // Keep CRLF together even when RichEdit requests a chunk ending at the CR.
+            if text.ends_with('\r') {
+                self.remaining = tail.strip_prefix('\n').unwrap_or(tail);
+            }
+            while let Some((line, rest)) = text.split_once('\r') {
+                output[written..written + line.len()].write_copy_of_slice(line.as_bytes());
+                written += line.len();
+                output[written].write(b'\n');
+                written += 1;
+                text = rest.strip_prefix('\n').unwrap_or(rest);
+            }
+        }
+        output[written..written + text.len()].write_copy_of_slice(text.as_bytes());
+        written + text.len()
+    }
+}
+
+unsafe extern "system" fn read_stream<F>(
     cookie: usize,
     data: *mut u8,
     amount: i32,
     read: *mut i32,
-) -> u32 {
-    let source = unsafe { &mut *(cookie as *mut &[u8]) };
-    let count = source.len().min(amount.max(0) as usize);
-    if count != 0 {
-        let output = unsafe { slice::from_raw_parts_mut(data, count) };
-        output.copy_from_slice(&source[..count]);
-    }
-    *source = &source[count..];
+) -> u32
+where
+    F: FnMut(&mut [MaybeUninit<u8>]) -> usize,
+{
+    let input = unsafe { &mut *(cookie as *mut F) };
+    let count = if amount > 0 {
+        input(unsafe { slice::from_raw_parts_mut(data.cast(), amount as usize) })
+    } else {
+        0
+    };
     unsafe { *read = count as i32 };
     0
 }
@@ -647,6 +755,74 @@ unsafe extern "system" fn read_stream(
 mod tests {
     use super::*;
     use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_POPUP};
+
+    #[test]
+    fn large_plain_text_stream_preserves_unicode_line_breaks_and_undo() {
+        load_control().unwrap();
+        let control = unsafe {
+            CreateWindowExW(
+                0,
+                wide(CLASS).as_ptr(),
+                ptr::null(),
+                WS_POPUP | STYLE,
+                0,
+                0,
+                450,
+                300,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null(),
+            )
+        };
+        assert!(!control.is_null());
+        let original = format!(
+            "{}{}",
+            "a".repeat(4095),
+            "🦀Привет\r\n世界\rX\r\r\n{\\rtf1}\tY\n".repeat(8500)
+        );
+        assert!(original.len() >= STREAM_TEXT_THRESHOLD);
+        let expected = crate::file_edit::normalized(&original);
+        read_only(control, false);
+        unsafe {
+            SendMessageW(
+                control,
+                WM_USER + 53,
+                0,
+                crate::document::DOCUMENT_LIMIT as LPARAM,
+            );
+        }
+        assert!(stream_plain_rtf(control, &original, Palette::new(false)));
+        assert!(
+            source(control) == expected,
+            "RTF stream changed the document text"
+        );
+        new_text(control, &original, Palette::new(false));
+
+        let loaded = source(control);
+        let mismatch = loaded
+            .chars()
+            .zip(expected.chars())
+            .position(|(a, b)| a != b);
+        assert_eq!(
+            mismatch,
+            None,
+            "{:?}",
+            loaded.chars().skip(4090).take(40).collect::<String>()
+        );
+        assert_eq!(loaded.len(), expected.len());
+        let start = rich_edit_test_undo(control);
+        assert_eq!(start, 0);
+        replace(control, CharRange { start: 0, end: 1 }, &wide("b"));
+        assert!(source(control).starts_with("baa"));
+        assert_ne!(rich_edit_test_undo(control), 0);
+        assert!(source(control) == expected);
+        unsafe { DestroyWindow(control) };
+    }
+
+    fn rich_edit_test_undo(control: HWND) -> isize {
+        unsafe { SendMessageW(control, 0x00c7, 0, 0) } // EM_UNDO
+    }
 
     #[test]
     fn replacing_live_formatting_with_reading_preserves_native_table_positions() {
@@ -716,7 +892,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(get_text(control, 4).matches('\u{fff9}').count(), 2);
-        let displayed: Vec<u16> = search_text(control).encode_utf16().collect();
+        let raw = get_text_units(control, 4);
+        let displayed = search_units(control);
+        assert_eq!(displayed.len(), raw.len());
+        for (source, normalized) in raw.into_iter().zip(&displayed) {
+            if matches!(source, 0xfff9 | 0xfffb | 0x0007) {
+                assert_eq!(*normalized, 0x0009);
+            }
+        }
         let link = &view.links[0];
         assert_eq!(
             String::from_utf16_lossy(&displayed[link.start as usize..link.end as usize]),
@@ -739,6 +922,20 @@ mod tests {
         assert!(jump.y < right.y);
         assert!(char_position(control, next.position).unwrap().y > right.y);
         unsafe { DestroyWindow(control) };
+    }
+
+    #[test]
+    fn search_normalization_keeps_object_and_utf16_offsets() {
+        let mut text = [
+            0xfff9, 0x0007, 0xd83e, 0xdd80, 0xfffc, 0x000d, 0xfffb, 0xdc00, 0xd800,
+        ];
+        normalize_search_units(&mut text);
+        assert_eq!(
+            text,
+            [
+                0x0009, 0x0009, 0xd83e, 0xdd80, 0xfffc, 0x000a, 0x0009, 0xfffd, 0xfffd
+            ],
+        );
     }
 
     #[test]

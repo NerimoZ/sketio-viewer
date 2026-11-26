@@ -101,6 +101,7 @@ const SCROLL_TIMER: usize = 2;
 const EDIT_TIMER: usize = 3;
 const MARKDOWN_APPLY_TIMER: usize = 4;
 const MARKDOWN_PREF_TIMER: usize = 5;
+const STARTUP_SESSION_TIMER: usize = 6;
 const UPDATE_ACTIVE_LINE: u32 = WM_APP + 3;
 const SHOW_MENU: u32 = WM_APP + 1;
 const WINDOW_WIDTH: i32 = 560;
@@ -492,7 +493,6 @@ fn run() -> io::Result<()> {
         app.refresh(false).map_err(io::Error::other)?;
         rich_edit::set_position(app.controls.document, position);
         app.sync_scroll();
-        app.save_session();
     }
     unsafe {
         ShowWindow(
@@ -506,6 +506,10 @@ fn run() -> io::Result<()> {
         UpdateWindow(window);
         let reader = app.borrow().controls.document;
         SetFocus(reader);
+    }
+    // Let the editor paint before writing the initial session to disk.
+    if !separate_window && unsafe { SetTimer(window, STARTUP_SESSION_TIMER, 10, None) } == 0 {
+        app.borrow().save_session();
     }
     if let Some(error) = startup_error {
         alert(window, &error);
@@ -1347,6 +1351,7 @@ impl App {
             }
         } else {
             self.find_hover = None;
+            self.matches = find_text::Matches::default();
             unsafe { SetFocus(self.controls.document) };
         }
     }
@@ -1684,17 +1689,12 @@ impl App {
         let draft = self.tabs[self.active_tab].draft.as_deref();
         rich_edit::read_only(reader, !self.wants_editor());
         if self.wants_editor() {
-            let source = draft.map_or_else(
-                || file_edit::normalized(&self.document.source),
-                Cow::Borrowed,
-            );
-            self.char_count = match (&source, draft) {
-                (Cow::Borrowed(_), None) => self.document.char_count,
-                _ => source.chars().count(),
-            };
+            let source = draft.unwrap_or(&self.document.source);
+            self.char_count =
+                draft.map_or(self.document.editor_char_count, |text| text.chars().count());
             self.rendered = None;
             self.live_lines = if self.live_enabled() {
-                live_markdown::lines(&source)
+                live_markdown::lines(&file_edit::normalized(source))
             } else {
                 Vec::new()
             };
@@ -1705,7 +1705,7 @@ impl App {
             let styled = self.live_lines.iter().any(live_markdown::Line::formatted)
                 && rich_edit::new_styled_text(reader, &self.live_document_rtf(), palette).is_ok();
             if !styled {
-                rich_edit::new_text(reader, &source, palette);
+                rich_edit::new_text(reader, source, palette);
             }
             rich_edit::select(reader, selection, false);
             if styled {
@@ -2829,7 +2829,7 @@ impl App {
             find_text::Matches::default()
         } else {
             find_text::Matches::new(
-                &rich_edit::search_text(self.controls.document),
+                &rich_edit::search_units(self.controls.document),
                 &query,
                 self.find_case,
             )
@@ -2884,6 +2884,9 @@ impl App {
             self.sync_cursor();
         }
         self.update_find_count(control_text(self.controls.query).is_empty());
+        if !self.find_open {
+            self.matches = find_text::Matches::default();
+        }
     }
 
     fn reveal_match(&mut self, range: CharRange) {
@@ -2894,7 +2897,7 @@ impl App {
     }
 
     fn replace_match(&mut self, all: bool) {
-        if !self.editable() {
+        if !self.find_open || !self.editable() {
             return;
         }
         self.flush_edit();
@@ -2904,10 +2907,11 @@ impl App {
         let reader = self.controls.document;
         let replacement = control_text(self.controls.replacement);
         if all {
-            let Some(output) = self
-                .matches
-                .replace_all(&replacement, document::DOCUMENT_LIMIT as usize)
-            else {
+            let Some(output) = self.matches.replace_all(
+                &rich_edit::search_units(reader),
+                &replacement,
+                document::DOCUMENT_LIMIT as usize,
+            ) else {
                 alert(
                     self.window,
                     "The replacement would exceed the document size limit.",
@@ -2937,7 +2941,6 @@ impl App {
             rich_edit::set_position(reader, scroll);
             self.queue_edit();
             self.flush_edit();
-            self.rebuild_search();
         } else {
             let selection = rich_edit::selection(reader);
             let Some(index) = self.matches.index(selection) else {
@@ -3890,6 +3893,11 @@ unsafe extern "system" fn window_proc(
             }
             WM_TIMER if word == MARKDOWN_PREF_TIMER => {
                 app.save_markdown_preference();
+                return 0;
+            }
+            WM_TIMER if word == STARTUP_SESSION_TIMER => {
+                unsafe { KillTimer(window, STARTUP_SESSION_TIMER) };
+                app.save_session();
                 return 0;
             }
             WM_TIMER if word == EDIT_TIMER => {

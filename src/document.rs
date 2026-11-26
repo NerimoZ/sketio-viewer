@@ -16,6 +16,7 @@ const WELCOME: &str = include_str!("../ui/welcome.md");
 pub struct Document {
     pub title: String,
     pub char_count: usize,
+    pub editor_char_count: usize,
     pub line_endings: &'static str,
     pub encoding: &'static str,
     pub path: Option<PathBuf>,
@@ -39,21 +40,7 @@ impl Document {
         let path = Self::absolute_path(path)?;
         let bytes = read_limited(&path, DOCUMENT_LIMIT)
             .map_err(|error| format!("Could not read the document. {error}"))?;
-        let encoding = if bytes.starts_with(&[0xff, 0xfe]) {
-            "UTF-16 LE"
-        } else if bytes.starts_with(&[0xfe, 0xff]) {
-            "UTF-16 BE"
-        } else if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
-            "UTF-8 BOM"
-        } else {
-            "UTF-8"
-        };
-        let content = if encoding == "UTF-8" {
-            String::from_utf8(bytes)
-                .map_err(|_| "Save this document as UTF-8 or UTF-16 and try again.".to_owned())?
-        } else {
-            decode(&bytes)?.into_owned()
-        };
+        let (content, encoding) = decode(bytes)?;
         if content.contains('\0') {
             return Err("This file contains binary data.".into());
         }
@@ -63,13 +50,16 @@ impl Document {
     }
 
     pub fn from_source(source: String, path: Option<PathBuf>) -> Self {
+        let char_count = source.chars().count();
+        let (line_endings, crlf) = line_endings(&source);
         Self {
             title: path
                 .as_deref()
                 .and_then(Path::file_name)
                 .map_or_else(|| "Start here".into(), |name| name.to_string_lossy().into()),
-            char_count: source.chars().count(),
-            line_endings: line_endings(&source),
+            char_count,
+            editor_char_count: char_count - crlf,
+            line_endings,
             encoding: "UTF-8",
             path,
             untitled: None,
@@ -447,51 +437,61 @@ fn read_limited(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn line_endings(source: &str) -> &'static str {
+fn line_endings(source: &str) -> (&'static str, usize) {
     let bytes = source.as_bytes();
-    let mut crlf = false;
-    let mut lf = false;
+    let mut crlf = 0;
     let mut cr = false;
-    for (index, byte) in bytes.iter().enumerate() {
-        match *byte {
-            b'\r' if bytes.get(index + 1) == Some(&b'\n') => crlf = true,
-            b'\r' => cr = true,
-            b'\n' if index == 0 || bytes[index - 1] != b'\r' => lf = true,
-            _ => {}
+    for (index, _) in source.match_indices('\r') {
+        if bytes.get(index + 1) == Some(&b'\n') {
+            crlf += 1;
+        } else {
+            cr = true;
         }
     }
-    match (crlf, lf, cr) {
+    let lf = if cr && crlf != 0 {
+        return ("Mixed", crlf);
+    } else if crlf == 0 {
+        source.contains('\n')
+    } else {
+        source.matches('\n').count() != crlf
+    };
+    let ending = match (crlf != 0, lf, cr) {
         (true, false, false) => "CRLF",
         (false, true, false) => "LF",
         (false, false, true) => "CR",
         (false, false, false) => "",
         _ => "Mixed",
-    }
+    };
+    (ending, crlf)
 }
 
-fn decode(bytes: &[u8]) -> Result<std::borrow::Cow<'_, str>, String> {
+fn decode(mut bytes: Vec<u8>) -> Result<(String, &'static str), String> {
     let invalid_encoding = || "Save this document as UTF-8 or UTF-16 and try again.".to_owned();
-    if let Some(body) = bytes
-        .strip_prefix(&[0xff, 0xfe])
-        .or_else(|| bytes.strip_prefix(&[0xfe, 0xff]))
-    {
+    if let [0xff, 0xfe, body @ ..] | [0xfe, 0xff, body @ ..] = bytes.as_slice() {
         if body.len() % 2 != 0 {
             return Err(invalid_encoding());
         }
-        let to_word = if bytes[0] == 0xff {
-            u16::from_le_bytes
+        let (to_word, encoding) = if bytes[0] == 0xff {
+            (u16::from_le_bytes as fn(_) -> _, "UTF-16 LE")
         } else {
-            u16::from_be_bytes
+            (u16::from_be_bytes as fn(_) -> _, "UTF-16 BE")
         };
         let words = body.as_chunks::<2>().0.iter().copied().map(to_word);
-        return char::decode_utf16(words)
-            .collect::<Result<String, _>>()
-            .map(Into::into)
-            .map_err(|_| invalid_encoding());
+        let mut content = String::with_capacity(body.len() / 2);
+        for character in char::decode_utf16(words) {
+            content.push(character.map_err(|_| invalid_encoding())?);
+        }
+        return Ok((content, encoding));
     }
-    let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
-    std::str::from_utf8(bytes)
-        .map(Into::into)
+    let encoding = if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
+        bytes.copy_within(3.., 0);
+        bytes.truncate(bytes.len() - 3);
+        "UTF-8 BOM"
+    } else {
+        "UTF-8"
+    };
+    String::from_utf8(bytes)
+        .map(|content| (content, encoding))
         .map_err(|_| invalid_encoding())
 }
 
@@ -627,8 +627,41 @@ Press <kbd>Ctrl</kbd>.
         ] {
             assert!(relative_path(folder, link).is_none(), "{link}");
         }
-        assert_eq!(decode(&[0xff, 0xfe, 0x16, 0x04]).unwrap(), "Ж");
-        assert_eq!(decode(b"\xef\xbb\xbfHi").unwrap(), "Hi");
-        assert!(decode(b"\xff").is_err());
+        assert_eq!(
+            decode(vec![0xff, 0xfe, 0x16, 0x04]).unwrap(),
+            ("Ж".into(), "UTF-16 LE"),
+        );
+        assert_eq!(
+            decode(b"\xef\xbb\xbfHi".to_vec()).unwrap(),
+            ("Hi".into(), "UTF-8 BOM"),
+        );
+        assert!(decode(b"\xff".to_vec()).is_err());
+    }
+
+    #[test]
+    fn decodes_big_endian_surrogates_and_rejects_truncated_utf16() {
+        assert_eq!(
+            decode(vec![0xfe, 0xff, 0xd8, 0x3e, 0xdd, 0x80]).unwrap(),
+            ("🦀".into(), "UTF-16 BE"),
+        );
+        assert!(decode(vec![0xff, 0xfe, 0x04]).is_err());
+        assert!(decode(vec![0xfe, 0xff, 0xd8, 0x3e]).is_err());
+    }
+
+    #[test]
+    fn counts_editor_characters_and_distinguishes_line_endings() {
+        for (source, line_ending, editor_chars) in [
+            ("", "", 0),
+            ("🦀\n", "LF", 2),
+            ("x\ry\r", "CR", 4),
+            ("a\r\né\r\n", "CRLF", 4),
+            ("a\rb\r\nc\n", "Mixed", 6),
+            ("\r\n\n", "Mixed", 2),
+        ] {
+            let document = Document::from_source(source.into(), None);
+            assert_eq!(document.line_endings, line_ending);
+            assert_eq!(document.char_count, source.chars().count());
+            assert_eq!(document.editor_char_count, editor_chars);
+        }
     }
 }

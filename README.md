@@ -3,37 +3,58 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/NerimoZ/sketio-viewer/releases/download/v0.1.0/Sketio-Viewer-Setup-0.1.0-x64.exe"><img src="docs/readme/download-installer.png" alt="Download Windows x64 installer (2.68 MiB)" width="48%"></a>
-  <a href="https://github.com/NerimoZ/sketio-viewer/releases/download/v0.1.0/SketioViewer.exe"><img src="docs/readme/download-portable.png" alt="Download standalone Windows x64 EXE (956 KiB)" width="48%"></a>
+  <a href="https://github.com/NerimoZ/sketio-viewer/releases/download/v0.1.1/Sketio-Viewer-Setup-0.1.1-x64.exe"><img src="docs/readme/download-installer.png" alt="Download Windows x64 installer (2.68 MiB)" width="48%"></a>
+  <a href="https://github.com/NerimoZ/sketio-viewer/releases/download/v0.1.1/SketioViewer.exe"><img src="docs/readme/download-portable.png" alt="Download standalone Windows x64 EXE (958 KiB)" width="48%"></a>
 </p>
 
-![Time to open the same TXT file in Windows Notepad and Sketio Viewer. Full measurements below.](docs/readme/startup.png)
+![Time to visible TXT text in Sketio Viewer, Windows Notepad, and NeNe Nib.](docs/readme/startup.png)
 
-![Private memory and working set after opening TXT files. Full measurements below.](docs/readme/memory.png)
+![Private working set and peak committed memory for Sketio Viewer, Windows Notepad, and NeNe Nib.](docs/readme/memory.png)
 
-![Executable and app-file sizes for Windows Notepad and Sketio Viewer. Full measurements below.](docs/readme/disk.png)
+![Executable sizes for Sketio Viewer, Windows Notepad, and NeNe Nib.](docs/readme/disk.png)
 
 ![Live Markdown, restored tabs, and offline editing in native Windows RichEdit.](docs/readme/features.png)
 
 <details>
 <summary>Benchmark data and method</summary>
 
-The test compared the Sketio Viewer v0.1.0 release executable with Windows Notepad 11.2609.11.0 (Microsoft Store package) on Windows 11 build 26200 and an Intel Core i3-10100F.
+The test compared Sketio Viewer v0.1.1, Windows Notepad 11.2609.11.0 (Microsoft Store package), and [NeNe Nib 1.1.0](https://github.com/hideyukiMORI/nene-nib/releases/tag/v1.1.0) on Windows 11 build 26200 and an Intel Core i3-10100F.
 
-Each app opened the same local UTF-8 TXT file in a new process with one test tab. Startup time runs from process launch until the visible editor returns the expected text and document length. Memory is for the main process, sampled 300 ms after the editor was ready. Results are medians of seven measured launches per app and file size, with alternating order and one warm-up per app.
+Each app opened the same local UTF-8 TXT in a new process with isolated tab and window state. Results are medians of seven runs after one warm-up per app and file size, with rotating order and a warm filesystem cache. Time runs from process launch to matching document text on screen. The detector sampled the same top-left area at 96 DPI. Client sizes were 640 × 380 for Sketio, 1024 × 731 for Notepad, and 640 × 360 for Nib. Memory was sampled 300 ms after text appeared.
 
-| TXT file | Notepad open | Viewer open | Notepad private | Viewer private | Notepad working set | Viewer working set |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 4 KiB | 523 ms | 96 ms | 106.11 MiB | 3.14 MiB | 120.76 MiB | 21.98 MiB |
-| 320 KiB | 527 ms | 135 ms | 109.47 MiB | 4.40 MiB | 122.91 MiB | 23.17 MiB |
-| 4 MiB | 618 ms | 584 ms | 133.57 MiB | 17.07 MiB | 147.33 MiB | 35.41 MiB |
+#### Time to visible text
 
-| Size on disk | Windows Notepad | Sketio Viewer |
+| TXT file | Sketio v0.1.1 | Windows Notepad | NeNe Nib 1.1.0 |
+| --- | ---: | ---: | ---: |
+| 4 KiB | 108 ms | 731 ms | 298 ms |
+| 4 MiB | 287 ms | 698 ms | 319 ms |
+| 16 MiB | 872 ms | 950 ms | 319 ms |
+
+#### Private working set
+
+Private process pages resident in RAM.
+
+| TXT file | Sketio v0.1.1 | Windows Notepad | NeNe Nib 1.1.0 |
+| --- | ---: | ---: | ---: |
+| 4 KiB | 2.27 MiB | 39.14 MiB | 12.72 MiB |
+| 4 MiB | 15.86 MiB | 67.69 MiB | 16.92 MiB |
+| 16 MiB | 51.75 MiB | 106.38 MiB | 29.24 MiB |
+
+#### Peak committed memory
+
+Highest process commit observed by the time of sampling, measured separately from resident RAM.
+
+| TXT file | Sketio v0.1.1 | Windows Notepad | NeNe Nib 1.1.0 |
+| --- | ---: | ---: | ---: |
+| 4 KiB | 2.98 MiB | 107.98 MiB | 61.10 MiB |
+| 4 MiB | 16.96 MiB | 134.44 MiB | 64.54 MiB |
+| 16 MiB | 52.61 MiB | 209.90 MiB | 77.39 MiB |
+
+| Main executable | Bytes | Size |
 | --- | ---: | ---: |
-| Executable | 3,212,128 B (3.06 MiB) | 978,944 B (0.93 MiB) |
-| App files | 18,462,934 B (17.61 MiB) | 1,100,023 B (1.05 MiB) |
-
-Notepad's app size is the sum of the files in its main installed x64 package, including its bundled assets. Viewer app files include the EXE and the file-association icon. Shared Windows libraries, separate packages, and per-user data are excluded.
+| Sketio Viewer v0.1.1 | 980,992 | 0.94 MiB |
+| Windows Notepad 11.2609.11.0 | 3,212,128 | 3.06 MiB |
+| NeNe Nib 1.1.0 | 4,571,648 | 4.36 MiB |
 
 </details>
 

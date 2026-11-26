@@ -4,17 +4,15 @@ use crate::rich_edit::CharRange;
 
 #[derive(Default)]
 pub struct Matches {
-    text: Vec<u16>,
     starts: Vec<i32>,
     size: i32,
 }
 
 impl Matches {
-    pub fn new(source: &str, query: &str, case_sensitive: bool) -> Self {
+    pub fn new(text: &[u16], query: &str, case_sensitive: bool) -> Self {
         if query.is_empty() {
             return Self::default();
         }
-        let text: Vec<_> = source.encode_utf16().collect();
         let needle: Vec<_> = query.encode_utf16().collect();
         let mut starts = Vec::new();
         let mut at = 0;
@@ -38,7 +36,6 @@ impl Matches {
             at += needle.len();
         }
         Self {
-            text,
             starts,
             size: needle.len() as i32,
         }
@@ -83,9 +80,9 @@ impl Matches {
         }
     }
 
-    pub fn replace_all(&self, replacement: &str, limit: usize) -> Option<Vec<u16>> {
+    pub fn replace_all(&self, text: &[u16], replacement: &str, limit: usize) -> Option<Vec<u16>> {
         let replacement: Vec<_> = replacement.encode_utf16().collect();
-        let size = self.text.len() - self.len() * self.size as usize;
+        let size = text.len().checked_sub(self.len() * self.size as usize)?;
         let size = size.checked_add(self.len().checked_mul(replacement.len())?)?;
         if size > limit {
             return None;
@@ -93,11 +90,11 @@ impl Matches {
         let mut output = Vec::with_capacity(size + 1);
         let mut at = 0;
         for &start in &self.starts {
-            output.extend_from_slice(&self.text[at..start as usize]);
+            output.extend_from_slice(text.get(at..start as usize)?);
             output.extend_from_slice(&replacement);
             at = (start + self.size) as usize;
         }
-        output.extend_from_slice(&self.text[at..]);
+        output.extend_from_slice(text.get(at..)?);
         output.push(0);
         Some(output)
     }
@@ -109,8 +106,8 @@ mod tests {
 
     #[test]
     fn find_and_replace_use_native_utf16_ranges_and_respect_case_and_wrap() {
-        let source = "🦀 Яма яма";
-        let results = Matches::new(source, "яма", false);
+        let source: Vec<_> = "🦀 Яма яма".encode_utf16().collect();
+        let results = Matches::new(&source, "яма", false);
         assert_eq!(results.len(), 2);
         let first = results.range(0).unwrap();
         let last = results.range(1).unwrap();
@@ -118,9 +115,9 @@ mod tests {
         assert_eq!(results.next(last, false, false), None);
         assert_eq!(results.next(last, false, true), Some(0));
         assert_eq!(results.next(first, true, true), Some(1));
-        assert_eq!(Matches::new(source, "яма", true).len(), 1);
-        assert!(results.replace_all("test", 4).is_none());
-        let replaced = results.replace_all("!", 100).unwrap();
+        assert_eq!(Matches::new(&source, "яма", true).len(), 1);
+        assert!(results.replace_all(&source, "test", 4).is_none());
+        let replaced = results.replace_all(&source, "!", 100).unwrap();
         assert_eq!(
             String::from_utf16_lossy(&replaced[..replaced.len() - 1]),
             "🦀 ! !"
