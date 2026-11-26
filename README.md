@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/readme/hero.png" alt="Sketio! Viewer — Markdown and plain text for Windows" width="100%">
+  <img src="docs/readme/hero-centered.png" alt="Sketio! Viewer — Markdown and plain text for Windows" width="100%">
 </p>
 
 <p align="center">
