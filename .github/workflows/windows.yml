@@ -1,0 +1,30 @@
+name: Windows build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - name: Check formatting
+        run: cargo +stable fmt --check
+      - name: Lint
+        run: cargo +stable clippy --locked --all-targets -- -D warnings
+      - name: Test
+        run: cargo +stable test --locked
+      - name: Build Windows executable
+        run: cargo +stable build --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sketio-viewer-windows-x64
+          path: target/release/SketioViewer.exe
+          if-no-files-found: error
