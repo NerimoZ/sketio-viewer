@@ -1,10 +1,48 @@
-<h1><img src="ui/logo.png" alt="" width="40" height="40" align="absmiddle"> Sketio Viewer</h1>
+<p align="center">
+  <img src="docs/readme/hero.png" alt="Sketio! Viewer — Markdown and plain text for Windows" width="100%">
+</p>
 
-A small Windows editor and reader for local Markdown and plain text files. It uses the Windows RichEdit control and runs without WebView2.
+<p align="center">
+  <a href="https://github.com/NerimoZ/sketio-viewer/releases/download/v0.1.0/Sketio-Viewer-Setup-0.1.0-x64.exe"><img src="docs/readme/download-installer.png" alt="Download Windows x64 installer (2.68 MiB)" width="48%"></a>
+  <a href="https://github.com/NerimoZ/sketio-viewer/releases/download/v0.1.0/SketioViewer.exe"><img src="docs/readme/download-portable.png" alt="Download standalone Windows x64 EXE (956 KiB)" width="48%"></a>
+</p>
+
+![Time to open the same TXT file in Windows Notepad and Sketio Viewer. Full measurements below.](docs/readme/startup.png)
+
+![Private memory and working set after opening TXT files. Full measurements below.](docs/readme/memory.png)
+
+![Executable and app-file sizes for Windows Notepad and Sketio Viewer. Full measurements below.](docs/readme/disk.png)
+
+![Live Markdown, restored tabs, and offline editing in native Windows RichEdit.](docs/readme/features.png)
+
+<details>
+<summary>Benchmark data and method</summary>
+
+The test compared the Sketio Viewer v0.1.0 release executable with Windows Notepad 11.2609.11.0 (Microsoft Store package) on Windows 11 build 26200 and an Intel Core i3-10100F.
+
+Each app opened the same local UTF-8 TXT file in a new process with one test tab. Startup time runs from process launch until the visible editor returns the expected text and document length. Memory is for the main process, sampled 300 ms after the editor was ready. Results are medians of seven measured launches per app and file size, with alternating order and one warm-up per app.
+
+| TXT file | Notepad open | Viewer open | Notepad private | Viewer private | Notepad working set | Viewer working set |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4 KiB | 523 ms | 96 ms | 106.11 MiB | 3.14 MiB | 120.76 MiB | 21.98 MiB |
+| 320 KiB | 527 ms | 135 ms | 109.47 MiB | 4.40 MiB | 122.91 MiB | 23.17 MiB |
+| 4 MiB | 618 ms | 584 ms | 133.57 MiB | 17.07 MiB | 147.33 MiB | 35.41 MiB |
+
+| Size on disk | Windows Notepad | Sketio Viewer |
+| --- | ---: | ---: |
+| Executable | 3,212,128 B (3.06 MiB) | 978,944 B (0.93 MiB) |
+| App files | 18,462,934 B (17.61 MiB) | 1,100,023 B (1.05 MiB) |
+
+Notepad's app size is the sum of the files in its main installed x64 package, including its bundled assets. Viewer app files include the EXE and the file-association icon. Shared Windows libraries, separate packages, and per-user data are excluded.
+
+</details>
+
+<details>
+<summary>Installation, shortcuts, and build instructions</summary>
 
 ## Install
 
-Download the [Windows x64 installer](../../releases/latest) and run it for the current user. The release also includes a standalone EXE. Choose **Sketio Viewer** in **Settings → Apps → Default apps** to make it the default for `.md`, `.markdown`, and `.txt`. Explorer displays the transparent Sketio icon for those file types when Viewer is selected.
+Run the Windows x64 installer for the current user or open the standalone EXE. Choose **Sketio Viewer** in **Settings → Apps → Default apps** to make it the default for `.md`, `.markdown`, and `.txt`.
 
 ## Use
 
@@ -52,3 +90,5 @@ Build the Windows installer with Inno Setup 6 installed.
 ```powershell
 pwsh -File .\installer\build.ps1
 ```
+
+</details>
