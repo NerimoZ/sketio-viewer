@@ -7,11 +7,11 @@
   <a href="https://github.com/NerimoZ/sketio-viewer/releases/download/v0.1.1/SketioViewer.exe"><img src="docs/readme/download-portable-v0.1.1.png" alt="Download standalone Windows x64 EXE (958 KiB)" width="48%"></a>
 </p>
 
-![Time to visible TXT text in Sketio Viewer, Windows Notepad, and NeNe Nib.](docs/readme/startup.png)
+![Time to visible TXT text in Sketio Viewer, Windows Notepad, and NeNe Nib.](docs/readme/startup-v0.1.1.png)
 
-![Private working set and peak committed memory for Sketio Viewer, Windows Notepad, and NeNe Nib.](docs/readme/memory.png)
+![Private working set and peak committed memory for Sketio Viewer, Windows Notepad, and NeNe Nib.](docs/readme/memory-v0.1.1.png)
 
-![Executable sizes for Sketio Viewer, Windows Notepad, and NeNe Nib.](docs/readme/disk.png)
+![Executable sizes for Sketio Viewer, Windows Notepad, and NeNe Nib.](docs/readme/disk-v0.1.1.png)
 
 ![Live Markdown, restored tabs, and offline editing in native Windows RichEdit.](docs/readme/features.png)
 
