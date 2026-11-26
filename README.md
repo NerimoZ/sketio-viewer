@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/NerimoZ/sketio-viewer/releases/download/v0.1.1/Sketio-Viewer-Setup-0.1.1-x64.exe"><img src="docs/readme/download-installer.png" alt="Download Windows x64 installer (2.68 MiB)" width="48%"></a>
-  <a href="https://github.com/NerimoZ/sketio-viewer/releases/download/v0.1.1/SketioViewer.exe"><img src="docs/readme/download-portable.png" alt="Download standalone Windows x64 EXE (958 KiB)" width="48%"></a>
+  <a href="https://github.com/NerimoZ/sketio-viewer/releases/download/v0.1.1/SketioViewer.exe"><img src="docs/readme/download-portable-v0.1.1.png" alt="Download standalone Windows x64 EXE (958 KiB)" width="48%"></a>
 </p>
 
 ![Time to visible TXT text in Sketio Viewer, Windows Notepad, and NeNe Nib.](docs/readme/startup.png)
