@@ -1,10 +1,10 @@
-# Sketio Viewer
+<h1><img src="ui/logo.png" alt="" width="40" height="40" align="absmiddle"> Sketio Viewer</h1>
 
 A small Windows editor and reader for local Markdown and plain text files. It uses the Windows RichEdit control and runs without WebView2.
 
 ## Install
 
-Run the Windows installer for the current user. Choose **Sketio Viewer** in **Settings → Apps → Default apps** to make it the default for `.md`, `.markdown`, and `.txt`. Explorer displays the transparent Sketio icon for those file types when Viewer is selected.
+Download the [Windows x64 installer](../../releases/latest) and run it for the current user. The release also includes a standalone EXE. Choose **Sketio Viewer** in **Settings → Apps → Default apps** to make it the default for `.md`, `.markdown`, and `.txt`. Explorer displays the transparent Sketio icon for those file types when Viewer is selected.
 
 ## Use
 
