@@ -336,9 +336,9 @@ fn run() -> io::Result<()> {
     } else {
         MarkdownMode::Source
     };
-    let size = read_window_size(settings.as_deref());
+    let window_settings = read_window_settings(settings.as_deref());
     let dpi = unsafe { GetDpiForSystem() }.max(96) as i32;
-    let (initial_width, initial_height) = initial_size(size, dpi);
+    let (initial_width, initial_height) = initial_size(window_settings, dpi);
     let separate_window = env::args_os().any(|arg| arg == "--new-window");
     let Startup {
         tabs,
@@ -397,6 +397,14 @@ fn run() -> io::Result<()> {
     };
     if window.is_null() {
         return Err(io::Error::last_os_error());
+    }
+    if !separate_window
+        && let Some(bounds) = window_settings.normal_position
+        && let Some(mut placement) = window_placement(window)
+    {
+        placement.showCmd = SW_HIDE as u32;
+        placement.rcNormalPosition = bounds;
+        unsafe { SetWindowPlacement(window, &placement) };
     }
     set_window_icons(window);
     floating::disable_shadow(window);
@@ -497,7 +505,7 @@ fn run() -> io::Result<()> {
     unsafe {
         ShowWindow(
             window,
-            if size.maximized {
+            if window_settings.maximized {
                 SW_SHOWMAXIMIZED
             } else {
                 SW_SHOWNORMAL
@@ -3069,48 +3077,65 @@ impl Drop for App {
 }
 
 #[derive(Clone, Copy)]
-struct WindowSize {
+struct WindowSettings {
     width: i32,
     height: i32,
     maximized: bool,
+    normal_position: Option<RECT>,
 }
 
-impl Default for WindowSize {
+impl Default for WindowSettings {
     fn default() -> Self {
         Self {
             width: WINDOW_WIDTH,
             height: WINDOW_HEIGHT,
             maximized: false,
+            normal_position: None,
         }
     }
 }
 
-fn read_window_size(directory: Option<&Path>) -> WindowSize {
+fn read_window_settings(directory: Option<&Path>) -> WindowSettings {
     directory
         .and_then(|path| fs::read_to_string(path.join("window.txt")).ok())
-        .and_then(|settings| parse_window_size(&settings))
+        .and_then(|settings| parse_window_settings(&settings))
         .unwrap_or_default()
 }
 
-fn parse_window_size(raw: &str) -> Option<WindowSize> {
+fn parse_window_settings(raw: &str) -> Option<WindowSettings> {
     let mut values = raw.split_ascii_whitespace();
     let width: i32 = values.next()?.parse().ok()?;
     let height: i32 = values.next()?.parse().ok()?;
     let maximized: bool = values.next()?.parse().ok()?;
-    if values.next().is_some()
-        || !(360..=16_384).contains(&width)
-        || !(380..=16_384).contains(&height)
-    {
+    if !(360..=16_384).contains(&width) || !(380..=16_384).contains(&height) {
         return None;
     }
-    Some(WindowSize {
+    let normal_position = if let Some(left) = values.next() {
+        let bounds = rect(
+            left.parse().ok()?,
+            values.next()?.parse().ok()?,
+            values.next()?.parse().ok()?,
+            values.next()?.parse().ok()?,
+        );
+        if bounds.right.checked_sub(bounds.left)? <= 0
+            || bounds.bottom.checked_sub(bounds.top)? <= 0
+            || values.next().is_some()
+        {
+            return None;
+        }
+        Some(bounds)
+    } else {
+        None
+    };
+    Some(WindowSettings {
         width,
         height,
         maximized,
+        normal_position,
     })
 }
 
-fn initial_size(size: WindowSize, dpi: i32) -> (i32, i32) {
+fn initial_size(settings: WindowSettings, dpi: i32) -> (i32, i32) {
     let mut work = RECT {
         left: 0,
         top: 0,
@@ -3119,8 +3144,8 @@ fn initial_size(size: WindowSize, dpi: i32) -> (i32, i32) {
     };
     unsafe { SystemParametersInfoW(SPI_GETWORKAREA, 0, ptr::from_mut(&mut work).cast(), 0) };
     (
-        (size.width * dpi / 96).min(work.right - work.left),
-        (size.height * dpi / 96).min(work.bottom - work.top),
+        (settings.width * dpi / 96).min(work.right - work.left),
+        (settings.height * dpi / 96).min(work.bottom - work.top),
     )
 }
 
@@ -3250,25 +3275,38 @@ fn save_setting(directory: Option<&Path>, name: &str, value: impl AsRef<[u8]>) {
     }
 }
 
-fn save_window_size(app: &App) {
-    if app.separate_window {
-        return;
-    }
+fn window_placement(window: HWND) -> Option<WINDOWPLACEMENT> {
     let mut placement = WINDOWPLACEMENT {
         length: mem::size_of::<WINDOWPLACEMENT>() as u32,
         ..unsafe { mem::zeroed() }
     };
-    if unsafe { GetWindowPlacement(app.window, &mut placement) } == 0 {
+    (unsafe { GetWindowPlacement(window, &mut placement) } != 0).then_some(placement)
+}
+
+fn save_window_settings(app: &App) {
+    if app.separate_window {
         return;
     }
-    let rect = placement.rcNormalPosition;
-    let width = ((rect.right - rect.left) * 96 + app.dpi / 2) / app.dpi;
-    let height = ((rect.bottom - rect.top) * 96 + app.dpi / 2) / app.dpi;
+    let Some(directory) = app.settings.as_deref() else {
+        return;
+    };
+    let Some(placement) = window_placement(app.window) else {
+        return;
+    };
+    // Keep the normal bounds in Win32 workspace coordinates for SetWindowPlacement.
+    let RECT {
+        left,
+        top,
+        right,
+        bottom,
+    } = placement.rcNormalPosition;
+    let width = ((right - left) * 96 + app.dpi / 2) / app.dpi;
+    let height = ((bottom - top) * 96 + app.dpi / 2) / app.dpi;
     let maximized =
         unsafe { IsZoomed(app.window) } != 0 || placement.flags & WPF_RESTORETOMAXIMIZED != 0;
-    let value = format!("{width} {height} {maximized}");
-    if parse_window_size(&value).is_some() {
-        save_setting(app.settings.as_deref(), "window.txt", &value);
+    let value = format!("{width} {height} {maximized} {left} {top} {right} {bottom}");
+    if parse_window_settings(&value).is_some() {
+        let _ = session::save_file(directory, "window.txt", value);
     }
 }
 
@@ -3651,7 +3689,7 @@ unsafe extern "system" fn window_proc(
                 }
                 app.apply_pending_markdown();
                 app.save_markdown_preference();
-                save_window_size(&app);
+                save_window_settings(&app);
                 app.save_session();
             }
             unsafe { DestroyWindow(window) };
@@ -3689,7 +3727,7 @@ unsafe extern "system" fn window_proc(
     }
     if let Some(mut app) = app_state.and_then(|state| state.try_borrow_mut().ok()) {
         match message {
-            WM_EXITSIZEMOVE => save_window_size(&app),
+            WM_EXITSIZEMOVE => save_window_settings(&app),
             WM_ERASEBKGND => return 1,
             WM_PAINT => {
                 let mut paint: PAINTSTRUCT = unsafe { mem::zeroed() };
@@ -4136,16 +4174,34 @@ mod settings_tests {
     }
 
     #[test]
-    fn saved_window_size_validates_dimensions_and_state() {
-        let size = parse_window_size("650 710 true\n").unwrap();
-        assert_eq!((size.width, size.height, size.maximized), (650, 710, true));
+    fn legacy_window_settings_keep_size_and_state() {
+        let settings = parse_window_settings("650 710 true\n").unwrap();
+        assert_eq!(
+            (settings.width, settings.height, settings.maximized),
+            (650, 710, true)
+        );
+        assert!(settings.normal_position.is_none());
+    }
+
+    #[test]
+    fn saved_window_settings_validate_normal_position() {
+        let settings = parse_window_settings("650 710 false -950 -20 -300 690").unwrap();
+        let bounds = settings.normal_position.unwrap();
+        assert_eq!(
+            (bounds.left, bounds.top, bounds.right, bounds.bottom),
+            (-950, -20, -300, 690)
+        );
         for invalid in [
             "200 710 false",
             "650 99999 false",
             "650 710",
             "650 710 true trailing",
+            "650 710 false 100 200 750",
+            "650 710 false 100 200 750 200",
+            "650 710 false 100 200 750 910 trailing",
+            "650 710 false -2147483648 200 750 910",
         ] {
-            assert!(parse_window_size(invalid).is_none());
+            assert!(parse_window_settings(invalid).is_none(), "{invalid}");
         }
     }
 }

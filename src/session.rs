@@ -48,13 +48,15 @@ pub fn save(directory: Option<&Path>, workspace: &Workspace) -> io::Result<()> {
     let Some(directory) = directory else {
         return Ok(());
     };
+    save_file(directory, "session.json", serde_json::to_vec(workspace)?)
+}
+
+pub fn save_file(directory: &Path, name: &str, data: impl AsRef<[u8]>) -> io::Result<()> {
     fs::create_dir_all(directory)?;
-    let data = serde_json::to_vec(workspace)?;
-    let temp = directory.join(format!("session-{}.tmp", std::process::id()));
-    fs::write(&temp, data)?;
-    if let Err(error) = fs::rename(&temp, directory.join("session.json")) {
+    let temp = directory.join(format!("{name}-{}.tmp", std::process::id()));
+    let result = fs::write(&temp, data).and_then(|()| fs::rename(&temp, directory.join(name)));
+    if result.is_err() {
         let _ = fs::remove_file(&temp);
-        return Err(error);
     }
-    Ok(())
+    result
 }
